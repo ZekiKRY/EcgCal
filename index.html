@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EP & ECG Caliper Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF.js Kütüphanesi -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        // PDF.js Worker ayarı (Gerekli)
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc;
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+        }
+
+        #canvas-container {
+            cursor: crosshair;
+        }
+
+        /* Custom scrollbar for sidebar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1); 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569; 
+        }
+
+        .tool-btn.active {
+            background-color: #3b82f6; /* Blue 500 */
+            color: white;
+            border-color: #60a5fa;
+        }
+
+        .hide-file-input {
+            width: 0.1px;
+            height: 0.1px;
+            opacity: 0;
+            overflow: hidden;
+            position: absolute;
+            z-index: -1;
+        }
+    </style>
+</head>
+<body class="flex h-screen w-screen relative overflow-hidden bg-slate-950">
+
+    <!-- Mobile Sidebar Overlay -->
+    <div id="mobile-overlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-30 hidden md:hidden transition-opacity opacity-0 pointer-events-none"></div>
+
+    <aside id="sidebar" class="fixed top-0 left-0 h-full md:relative z-40 transform -translate-x-full md:translate-x-0 transition-transform duration-300 w-72 bg-slate-800 border-r border-slate-700 flex flex-col shadow-xl">
+        <div class="p-5 border-b border-slate-700">
+            <h1 class="text-xl font-bold text-white flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-400"><path d="M3 12h4l3-9 5 18 3-9h3"/></svg>
+                EP Caliper
+            </h1>
+            <p class="text-xs text-slate-400 mt-1">Web-based ECG Measurement</p>
+        </div>
+
+        <div class="p-5 flex-1 overflow-y-auto flex flex-col gap-6">
+            
+            <!-- Upload Section -->
+            <div class="flex flex-col gap-2">
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">1. File</label>
+                <input type="file" id="image-upload" class="hide-file-input" accept="image/*,application/pdf">
+                <label for="image-upload" id="upload-dropzone" class="flex flex-col items-center justify-center gap-2 w-full py-5 px-4 bg-slate-800 border-2 border-dashed border-slate-600 hover:border-blue-500 hover:bg-slate-700 rounded-lg cursor-pointer transition-all duration-200 text-sm font-medium text-slate-300 group">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400 group-hover:text-blue-400 transition-colors"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <span class="text-center group-hover:text-white transition-colors">Click to Upload<br><span class="text-xs text-slate-500 font-normal">or drag and drop here</span></span>
+                </label>
+            </div>
+
+            <!-- Settings Section -->
+            <div class="flex flex-col gap-2">
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">2. Settings</label>
+                <div class="flex items-center justify-between bg-slate-900/50 p-3 rounded-lg border border-slate-700">
+                    <span class="text-sm font-medium text-slate-300">Sweep Speed</span>
+                    <div class="flex items-center gap-1">
+                        <input type="number" id="sweep-speed" value="25" min="25" max="200" step="25" class="w-16 bg-slate-700 text-white text-center rounded border border-slate-600 px-2 py-1 text-sm focus:outline-none focus:border-blue-500">
+                        <span class="text-xs text-slate-400">mm/s</span>
+                    </div>
+                </div>
+                
+                <div class="flex items-center justify-between bg-slate-900/50 p-3 rounded-lg border border-slate-700">
+                    <span class="text-sm font-medium text-slate-300">Show BPM</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="toggle-bpm" class="sr-only peer">
+                        <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"></div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Actions / Tools Section -->
+            <div class="flex flex-col gap-2">
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">3. Tools</label>
+                
+                <button id="btn-tool-calibrate" class="tool-btn flex items-center gap-3 w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-all text-sm font-medium text-left">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20"/><path d="M12 2v20"/><path d="m4.93 4.93 14.14 14.14"/><path d="m4.93 19.07 14.14-14.14"/></svg>
+                    Calibrate (1 Big Square)
+                </button>
+
+                <button id="btn-tool-measure" class="tool-btn active flex items-center gap-3 w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-all text-sm font-medium text-left">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 21H3V3"/><path d="M21 9h-4"/><path d="M21 13h-3"/><path d="M21 17h-2"/><path d="M7 21v-4"/><path d="M11 21v-3"/><path d="M15 21v-2"/></svg>
+                    Measure (Caliper)
+                </button>
+                
+                <button id="btn-tool-pan" class="tool-btn flex items-center gap-3 w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-all text-sm font-medium text-left">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M19 9l3 3-3 3"/><path d="M9 19l3 3 3-3"/><path d="M2 12h20"/><path d="M12 2v20"/></svg>
+                    Pan Image (Middle-Click)
+                </button>
+
+                <button id="btn-clear" class="flex items-center gap-3 w-full py-2.5 px-4 mt-2 bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-900/50 rounded-lg transition-all text-sm font-medium text-left">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                    Clear All Calipers
+                </button>
+            </div>
+
+            <!-- Instructions -->
+            <div class="mt-auto bg-slate-900/80 p-4 rounded-lg border border-slate-700 text-xs text-slate-400 space-y-2">
+                <p><strong class="text-slate-200">Drag:</strong> Left click & hold caliper to move.</p>
+                <p><strong class="text-slate-200">Delete:</strong> Right click on a caliper.</p>
+                <p><strong class="text-slate-200">Zoom:</strong> Mouse wheel.</p>
+                <p><strong class="text-slate-200">Pan:</strong> Middle mouse button or Pan tool.</p>
+            </div>
+        </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col relative bg-slate-950" id="canvas-container">
+        <!-- Mobile Menu Toggle Button -->
+        <button id="mobile-menu-btn" class="md:hidden absolute top-2 left-4 z-20 p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg border border-slate-600 shadow-md transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+
+        <!-- Top Status Bar -->
+        <div class="absolute top-0 left-0 right-0 h-12 bg-slate-900/80 backdrop-blur border-b border-slate-800 z-10 flex items-center justify-between pl-16 pr-4 md:px-6 pointer-events-none">
+            <div id="status-text" class="text-sm font-medium text-blue-400 drop-shadow-md">
+                Awaiting Image Upload...
+            </div>
+            <div id="scale-info" class="text-sm font-mono text-slate-300 bg-slate-800 px-3 py-1 rounded border border-slate-700">
+                Uncalibrated
+            </div>
+        </div>
+
+        <canvas id="ep-canvas" class="block w-full h-full touch-none"></canvas>
+    </main>
+
+    <script>
+        // DOM Elements
+        const canvas = document.getElementById('ep-canvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        
+        const sidebar = document.getElementById('sidebar');
+        const mobileOverlay = document.getElementById('mobile-overlay');
+        const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+        let isMobileMenuOpen = false;
+
+        const fileInput = document.getElementById('image-upload');
+        const sweepSpeedInput = document.getElementById('sweep-speed');
+        const toggleBpm = document.getElementById('toggle-bpm');
+        
+        const btnCalibrate = document.getElementById('btn-tool-calibrate');
+        const btnMeasure = document.getElementById('btn-tool-measure');
+        const btnPan = document.getElementById('btn-tool-pan');
+        const btnClear = document.getElementById('btn-clear');
+        
+        const statusText = document.getElementById('status-text');
+        const scaleInfo = document.getElementById('scale-info');
+
+        // Application State
+        let img = null;
+        let transform = { x: 0, y: 0, zoom: 1 };
+        let showBpm = false;
+        
+        // Tools: 'measure', 'calibrate', 'pan'
+        let currentTool = 'measure'; 
+        
+        // Calibration
+        // 1 large square = 5 mm. 
+        // 25 mm/s -> 200 ms. 50 mm/s -> 100 ms.
+        let calibPixels = null; // Pixel width of 1 large square
+        let calibStep = 0; // 0: idle, 1: point1 clicked
+        let calibTempX = null;
+        
+        // Calipers
+        let calipers = []; // { id, x1, x2, y }
+        let nextCaliperId = 1;
+        let measureStep = 0; // 0: idle, 1: first line placed
+        let measureTempX1 = null;
+        let measureTempY = null;
+        
+        // Interaction State
+        let isPanning = false;
+        let panStartX = 0, panStartY = 0;
+        
+        let hoveredCaliperId = null;
+        let draggingCaliperId = null;
+        let dragStartImgX = 0;
+        let dragStartCaliperX1 = 0, dragStartCaliperX2 = 0;
+
+        let mouseImgX = 0, mouseImgY = 0;
+
+        // Constants
+        const COLOR_CALIB = '#fbbf24'; // Amber 400
+        const COLOR_CALIPER = '#22d3ee'; // Cyan 400
+        const COLOR_CALIPER_HOVER = '#ffffff'; 
+
+        // Mobile Menu Toggle Logic
+        function toggleMobileMenu() {
+            isMobileMenuOpen = !isMobileMenuOpen;
+            if (isMobileMenuOpen) {
+                sidebar.classList.remove('-translate-x-full');
+                mobileOverlay.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
+                mobileOverlay.classList.add('opacity-100', 'pointer-events-auto');
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                mobileOverlay.classList.remove('opacity-100', 'pointer-events-auto');
+                mobileOverlay.classList.add('opacity-0', 'pointer-events-none');
+                setTimeout(() => {
+                    if (!isMobileMenuOpen) mobileOverlay.classList.add('hidden');
+                }, 300);
+            }
+        }
+
+        mobileMenuBtn.addEventListener('click', toggleMobileMenu);
+        mobileOverlay.addEventListener('click', toggleMobileMenu);
+
+        function resizeCanvas() {
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            draw();
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function onMediaLoaded(mediaSource) {
+            img = mediaSource;
+            calibPixels = null; // reset calibration on new image
+            calipers = []; // clear calipers
+            fitImageToScreen();
+            setTool('calibrate'); // Auto-prompt calibration
+            updateStatusText();
+            draw();
+            
+            // Auto close mobile menu after upload
+            if (window.innerWidth < 768 && isMobileMenuOpen) toggleMobileMenu();
+        }
+
+        function handleImageLoad(file) {
+            if (!file) return;
+
+            // Eğer dosya PDF ise
+            if (file.type === 'application/pdf') {
+                statusText.innerText = "Loading PDF...";
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const typedarray = new Uint8Array(e.target.result);
+                        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                        
+                        // İlk sayfayı alıyoruz
+                        const page = await pdf.getPage(1); 
+                        
+                        // EKG çizgilerinin net görünmesi için yüksek ölçek (scale: 3) kullanıyoruz
+                        const viewport = page.getViewport({ scale: 3.0 });
+                        
+                        // Arkaplanda bir canvas oluşturup PDF'i buraya çiziyoruz
+                        const offscreenCanvas = document.createElement('canvas');
+                        const offscreenCtx = offscreenCanvas.getContext('2d');
+                        offscreenCanvas.width = viewport.width;
+                        offscreenCanvas.height = viewport.height;
+                        
+                        const renderContext = {
+                            canvasContext: offscreenCtx,
+                            viewport: viewport
+                        };
+                        
+                        await page.render(renderContext).promise;
+                        
+                        // Oluşan canvas'ı resim kaynağımız olarak kullanıyoruz
+                        onMediaLoaded(offscreenCanvas);
+                        
+                    } catch (error) {
+                        console.error("PDF render hatası: ", error);
+                        statusText.innerText = "Error loading PDF.";
+                        statusText.className = "text-sm font-medium text-red-400";
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+                return;
+            }
+
+            // Normal Resim ise (PNG, JPG vb.)
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const newImg = new Image();
+                newImg.onload = () => {
+                    onMediaLoaded(newImg);
+                };
+                newImg.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                handleImageLoad(e.target.files[0]);
+            }
+        });
+
+        // --- Drag & Drop (Sürükle & Bırak) Yönetimi ---
+        const dropzone = document.getElementById('upload-dropzone');
+
+        // Sayfa genelinde varsayılan dosya açma davranışını kapat (sayfa değişmesini engeller)
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            window.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+
+        // Dosya sürüklendiğinde yükleme kutucuğunu belirginleştir
+        window.addEventListener('dragenter', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dropzone.classList.add('border-blue-500', 'bg-slate-700');
+                dropzone.classList.remove('border-slate-600', 'bg-slate-800');
+            }
+        });
+
+        // Sürükleme işleminden vazgeçilirse rengi eski haline çevir
+        window.addEventListener('dragleave', (e) => {
+            if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
+                dropzone.classList.remove('border-blue-500', 'bg-slate-700');
+                dropzone.classList.add('border-slate-600', 'bg-slate-800');
+            }
+        });
+
+        // Dosya bırakıldığında okuma işlemini başlat
+        window.addEventListener('drop', (e) => {
+            dropzone.classList.remove('border-blue-500', 'bg-slate-700');
+            dropzone.classList.add('border-slate-600', 'bg-slate-800');
+            
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                handleImageLoad(e.dataTransfer.files[0]);
+            }
+        });
+        // -----------------------------------------------------
+
+        function fitImageToScreen() {
+            if (!img) return;
+            const padding = 40;
+            const scaleX = (canvas.width - padding) / img.width;
+            const scaleY = (canvas.height - padding) / img.height;
+            transform.zoom = Math.min(scaleX, scaleY);
+            
+            // Center
+            transform.x = (canvas.width - img.width * transform.zoom) / 2;
+            transform.y = (canvas.height - img.height * transform.zoom) / 2;
+        }
+
+        function getScaleMsPerPixel() {
+            if (!calibPixels) return null;
+            const sweepSpeed = parseFloat(sweepSpeedInput.value) || 25;
+            // 1 büyük kare = 1000ms (Kullanıcı ayarı: 25 mm/s baz alınarak orantılanır)
+            const msPerLargeSquare = 1000 * (25 / sweepSpeed);
+            return msPerLargeSquare / calibPixels;
+        }
+
+        function imgToScreen(imgCoord, axis) {
+            if (axis === 'x') return imgCoord * transform.zoom + transform.x;
+            if (axis === 'y') return imgCoord * transform.zoom + transform.y;
+            return 0;
+        }
+
+        function screenToImg(screenCoord, axis) {
+            if (axis === 'x') return (screenCoord - transform.x) / transform.zoom;
+            if (axis === 'y') return (screenCoord - transform.y) / transform.zoom;
+            return 0;
+        }
+
+        function updateStatusText() {
+            if (!img) {
+                statusText.innerText = "Awaiting Image Upload...";
+                statusText.className = "text-sm font-medium text-slate-400";
+                scaleInfo.innerText = "Uncalibrated";
+                return;
+            }
+
+            const msPerPx = getScaleMsPerPixel();
+            if (msPerPx) {
+                scaleInfo.innerText = `Scale: ${msPerPx.toFixed(2)} ms/px`;
+                scaleInfo.className = "text-sm font-mono text-green-400 bg-green-900/20 px-3 py-1 rounded border border-green-800/50";
+            } else {
+                scaleInfo.innerText = "Uncalibrated";
+                scaleInfo.className = "text-sm font-mono text-amber-400 bg-amber-900/20 px-3 py-1 rounded border border-amber-800/50";
+            }
+
+            if (currentTool === 'calibrate') {
+                if (calibStep === 0) statusText.innerText = "Calibration: Click the start of 1 Large Square (1000ms).";
+                else statusText.innerText = "Calibration: Click the end of the Large Square.";
+                statusText.className = "text-sm font-medium text-amber-400";
+            } else if (currentTool === 'measure') {
+                if (measureStep === 0) statusText.innerText = "Measure: Click to place the first caliper line.";
+                else statusText.innerText = "Measure: Click to place the second caliper line.";
+                statusText.className = "text-sm font-medium text-cyan-400";
+            } else if (currentTool === 'pan') {
+                statusText.innerText = "Pan Mode: Click and drag to move the image.";
+                statusText.className = "text-sm font-medium text-slate-300";
+            }
+        }
+
+        function setTool(tool) {
+            currentTool = tool;
+            
+            // Reset tool states
+            calibStep = 0;
+            measureStep = 0;
+            draggingCaliperId = null;
+
+            // Update UI buttons
+            [btnCalibrate, btnMeasure, btnPan].forEach(btn => btn.classList.remove('active'));
+            if (tool === 'calibrate') btnCalibrate.classList.add('active');
+            if (tool === 'measure') btnMeasure.classList.add('active');
+            if (tool === 'pan') btnPan.classList.add('active');
+
+            // Update Cursor
+            container.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+            
+            updateStatusText();
+            draw();
+        }
+
+        btnCalibrate.addEventListener('click', () => setTool('calibrate'));
+        btnMeasure.addEventListener('click', () => setTool('measure'));
+        btnPan.addEventListener('click', () => setTool('pan'));
+        
+        btnClear.addEventListener('click', () => {
+            calipers = [];
+            setTool('measure');
+            draw();
+            if (window.innerWidth < 768 && isMobileMenuOpen) toggleMobileMenu();
+        });
+
+        // Değer değişimi tamamlandığında kurallara (25'in katı, min 25, max 200) uymasını sağla
+        sweepSpeedInput.addEventListener('change', (e) => {
+            let val = parseInt(e.target.value);
+            if (isNaN(val) || val < 25) val = 25;
+            if (val > 200) val = 200;
+            val = Math.round(val / 25) * 25; // 25'in katlarına yuvarla
+            e.target.value = val;
+            updateStatusText();
+            draw();
+        });
+
+        sweepSpeedInput.addEventListener('input', () => {
+            updateStatusText();
+            draw();
+        });
+
+        toggleBpm.addEventListener('change', (e) => {
+            showBpm = e.target.checked;
+            draw();
+        });
+
+        // Hit Detection
+        function getHitCaliper(imgX, imgY) {
+            const hitThresholdScreen = 8; // pixels
+            const thresholdImg = hitThresholdScreen / transform.zoom;
+
+            // Search backwards to prioritize top-most rendered
+            for (let i = calipers.length - 1; i >= 0; i--) {
+                const c = calipers[i];
+                
+                // Check vertical lines
+                if (Math.abs(imgX - c.x1) <= thresholdImg) return c.id;
+                if (Math.abs(imgX - c.x2) <= thresholdImg) return c.id;
+                
+                // Check horizontal line
+                const minX = Math.min(c.x1, c.x2) - thresholdImg;
+                const maxX = Math.max(c.x1, c.x2) + thresholdImg;
+                if (imgX >= minX && imgX <= maxX && Math.abs(imgY - c.y) <= thresholdImg) {
+                    return c.id;
+                }
+            }
+            return null;
+        }
+
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+        // --- Unified Pointer/Touch Interactions (PC & Mobile Sync) ---
+        function handlePointerDown(sx, sy, button) {
+            const ix = screenToImg(sx, 'x');
+            const iy = screenToImg(sy, 'y');
+
+            // Right click / Long Press: Delete or Cancel current action
+            if (button === 2) {
+                if (currentTool === 'measure' && measureStep === 1) {
+                    measureStep = 0;
+                    draw();
+                    return;
+                }
+                if (currentTool === 'calibrate' && calibStep === 1) {
+                    calibStep = 0;
+                    draw();
+                    return;
+                }
+                const hitId = getHitCaliper(ix, iy);
+                if (hitId) {
+                    calipers = calipers.filter(c => c.id !== hitId);
+                    hoveredCaliperId = null;
+                    draw();
+                }
+                return;
+            }
+
+            // Middle click or Pan tool: Pan
+            if (button === 1 || currentTool === 'pan') {
+                isPanning = true;
+                panStartX = sx - transform.x;
+                panStartY = sy - transform.y;
+                container.style.cursor = 'grabbing';
+                return;
+            }
+
+            // Left click / Tap Actions
+            if (button === 0) {
+                if (currentTool === 'calibrate') {
+                    if (calibStep === 0) {
+                        calibTempX = ix;
+                        calibStep = 1;
+                    } else if (calibStep === 1) {
+                        const dist = Math.abs(ix - calibTempX);
+                        if (dist > 5) {
+                            calibPixels = dist;
+                            setTool('measure'); 
+                        } else {
+                            calibStep = 0;
+                        }
+                    }
+                    updateStatusText();
+                    draw();
+                } 
+                else if (currentTool === 'measure') {
+                    const hitId = getHitCaliper(ix, iy);
+                    if (hitId) {
+                        draggingCaliperId = hitId;
+                        dragStartImgX = ix;
+                        const c = calipers.find(c => c.id === hitId);
+                        dragStartCaliperX1 = c.x1;
+                        dragStartCaliperX2 = c.x2;
+                        return; 
+                    }
+
+                    if (measureStep === 0) {
+                        measureTempX1 = ix;
+                        measureTempY = iy;
+                        measureStep = 1;
+                    } else if (measureStep === 1) {
+                        if (Math.abs(ix - measureTempX1) > 1) {
+                            calipers.push({ id: nextCaliperId++, x1: measureTempX1, x2: ix, y: iy });
+                        }
+                        measureStep = 0;
+                    }
+                    updateStatusText();
+                    draw();
+                }
+            }
+        }
+
+        function handlePointerMove(sx, sy) {
+            const ix = screenToImg(sx, 'x');
+            const iy = screenToImg(sy, 'y');
+            mouseImgX = ix;
+            mouseImgY = iy;
+
+            if (isPanning) {
+                transform.x = sx - panStartX;
+                transform.y = sy - panStartY;
+                draw();
+                return;
+            }
+
+            if (draggingCaliperId) {
+                const deltaX = ix - dragStartImgX;
+                const c = calipers.find(c => c.id === draggingCaliperId);
+                if (c) {
+                    c.x1 = dragStartCaliperX1 + deltaX;
+                    c.x2 = dragStartCaliperX2 + deltaX;
+                    draw();
+                }
+                return;
+            }
+
+            if (currentTool === 'measure' && !measureStep) {
+                const hitId = getHitCaliper(ix, iy);
+                if (hitId !== hoveredCaliperId) {
+                    hoveredCaliperId = hitId;
+                    container.style.cursor = hitId ? 'ew-resize' : 'crosshair';
+                    draw();
+                }
+            } else {
+                hoveredCaliperId = null;
+            }
+
+            if (calibStep === 1 || measureStep === 1) {
+                if(measureStep === 1) {
+                    measureTempY = iy;
+                }
+                draw();
+            }
+        }
+
+        function handlePointerUp() {
+            isPanning = false;
+            draggingCaliperId = null;
+            if (currentTool === 'pan') {
+                container.style.cursor = 'grab';
+            } else if (currentTool === 'measure' && !hoveredCaliperId) {
+                container.style.cursor = 'crosshair';
+            }
+        }
+
+        let isTouchActive = false;
+
+        // --- Mouse Events (Desktop) ---
+        canvas.addEventListener('mousedown', e => {
+            if (isTouchActive || !img) return;
+            const rect = canvas.getBoundingClientRect();
+            handlePointerDown(e.clientX - rect.left, e.clientY - rect.top, e.button);
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (isTouchActive || !img) return;
+            const rect = canvas.getBoundingClientRect();
+            handlePointerMove(e.clientX - rect.left, e.clientY - rect.top);
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isTouchActive) return;
+            handlePointerUp();
+        });
+
+        // --- Touch Events (Mobile/Tablet) ---
+        let initialPinchDist = null;
+        let pinchCenterImgX = 0;
+        let pinchCenterImgY = 0;
+        let touchLongPressTimer = null;
+
+        canvas.addEventListener('touchstart', e => {
+            e.preventDefault(); // Sayfanın kaymasını engelle
+            isTouchActive = true;
+            if (!img) return;
+
+            const rect = canvas.getBoundingClientRect();
+            
+            if (e.touches.length === 2) {
+                clearTimeout(touchLongPressTimer);
+                const t1 = e.touches[0]; 
+                const t2 = e.touches[1];
+                initialPinchDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                
+                const cx = (t1.clientX + t2.clientX) / 2 - rect.left;
+                const cy = (t1.clientY + t2.clientY) / 2 - rect.top;
+                
+                pinchCenterImgX = screenToImg(cx, 'x');
+                pinchCenterImgY = screenToImg(cy, 'y');
+                
+                if (measureStep === 1) measureStep = 0;
+                if (calibStep === 1) calibStep = 0;
+                draw();
+            } else if (e.touches.length === 1) {
+                const sx = e.touches[0].clientX - rect.left;
+                const sy = e.touches[0].clientY - rect.top;
+
+                // Uzun basma (500ms) = Sağ Tık (Silme İşlemi)
+                touchLongPressTimer = setTimeout(() => {
+                    handlePointerDown(sx, sy, 2); 
+                    if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback desteği varsa titreşim
+                }, 500);
+
+                handlePointerDown(sx, sy, 0); 
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (!img) return;
+            const rect = canvas.getBoundingClientRect();
+
+            if (e.touches.length === 2 && initialPinchDist !== null) {
+                const t1 = e.touches[0]; 
+                const t2 = e.touches[1];
+                const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                
+                const zoomFactor = currentDist / initialPinchDist;
+                
+                let newZoom = transform.zoom * zoomFactor;
+                newZoom = Math.max(0.05, Math.min(newZoom, 50));
+                transform.zoom = newZoom;
+                
+                const cx = (t1.clientX + t2.clientX) / 2 - rect.left;
+                const cy = (t1.clientY + t2.clientY) / 2 - rect.top;
+                transform.x = cx - pinchCenterImgX * transform.zoom;
+                transform.y = cy - pinchCenterImgY * transform.zoom;
+                
+                initialPinchDist = currentDist; 
+                draw();
+            } else if (e.touches.length === 1) {
+                const sx = e.touches[0].clientX - rect.left;
+                const sy = e.touches[0].clientY - rect.top;
+                
+                // Parmağı hareket ettirirse yanlışlıkla uzun basılmasını iptal et
+                clearTimeout(touchLongPressTimer);
+                handlePointerMove(sx, sy);
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', e => {
+            e.preventDefault();
+            clearTimeout(touchLongPressTimer);
+            initialPinchDist = null;
+            handlePointerUp();
+            setTimeout(() => { isTouchActive = false; }, 300);
+        }, { passive: false });
+
+
+        // Zoom logic
+        canvas.addEventListener('wheel', e => {
+            e.preventDefault();
+            if (!img) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const sx = e.clientX - rect.left;
+            const sy = e.clientY - rect.top;
+            
+            // Current mouse pos in image coords
+            const ixBefore = screenToImg(sx, 'x');
+            const iyBefore = screenToImg(sy, 'y');
+
+            const zoomSensitivity = 0.0015;
+            let zoomDelta = -e.deltaY * zoomSensitivity;
+            
+            let newZoom = transform.zoom * (1 + zoomDelta);
+            newZoom = Math.max(0.05, Math.min(newZoom, 50)); // clamp zoom
+
+            transform.zoom = newZoom;
+
+            // Adjust pan so mouse stays over same image coordinate
+            transform.x = sx - ixBefore * transform.zoom;
+            transform.y = sy - iyBefore * transform.zoom;
+
+            draw();
+        }, { passive: false });
+
+        function drawLine(sx1, sy1, sx2, sy2, color, width, dash = []) {
+            ctx.beginPath();
+            ctx.moveTo(sx1, sy1);
+            ctx.lineTo(sx2, sy2);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.setLineDash(dash);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function drawCaliper(c, isHovered) {
+            const sx1 = imgToScreen(c.x1, 'x');
+            const sx2 = imgToScreen(c.x2, 'x');
+            const sy = imgToScreen(c.y, 'y');
+            const color = isHovered ? COLOR_CALIPER_HOVER : COLOR_CALIPER;
+
+            // Draw vertical guides (spanning full canvas)
+            drawLine(sx1, 0, sx1, canvas.height, color, 1.5, [6, 4]);
+            drawLine(sx2, 0, sx2, canvas.height, color, 1.5, [6, 4]);
+
+            // Draw horizontal connector
+            drawLine(sx1, sy, sx2, sy, color, 2);
+
+            // Draw arrows at ends of connector
+            const arrowSize = 6;
+            ctx.fillStyle = color;
+            ctx.beginPath(); // Left arrow
+            if (sx1 < sx2) {
+                ctx.moveTo(sx1, sy); ctx.lineTo(sx1 + arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx1 + arrowSize, sy + arrowSize/1.5);
+            } else {
+                ctx.moveTo(sx1, sy); ctx.lineTo(sx1 - arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx1 - arrowSize, sy + arrowSize/1.5);
+            }
+            ctx.fill();
+
+            ctx.beginPath(); // Right arrow
+            if (sx2 > sx1) {
+                ctx.moveTo(sx2, sy); ctx.lineTo(sx2 - arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx2 - arrowSize, sy + arrowSize/1.5);
+            } else {
+                ctx.moveTo(sx2, sy); ctx.lineTo(sx2 + arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx2 + arrowSize, sy + arrowSize/1.5);
+            }
+            ctx.fill();
+
+            // Calculate measurements
+            const msPerPx = getScaleMsPerPixel();
+            let text = "";
+            let text2 = "";
+            
+            if (msPerPx) {
+                const pixelDist = Math.abs(c.x2 - c.x1);
+                const ms = pixelDist * msPerPx;
+                text = `${ms.toFixed(0)} ms`;
+                if (showBpm) {
+                    const bpm = ms > 0 ? (60000 / ms) : 0;
+                    text2 = `[${bpm.toFixed(0)} bpm]`;
+                }
+            } else {
+                text = `${Math.abs(c.x2 - c.x1).toFixed(0)} px`;
+            }
+
+            // Draw Label Box
+            const cx = (sx1 + sx2) / 2;
+            ctx.font = "bold 13px Inter, sans-serif";
+            const m1 = ctx.measureText(text);
+            const m2 = ctx.measureText(text2);
+            const textWidth = Math.max(m1.width, m2.width);
+            const boxW = textWidth + 16;
+            const boxH = text2 ? 40 : 22;
+            const boxX = cx - boxW / 2;
+            const boxY = sy - boxH / 2;
+
+            // Pembe EKG zemininde okunabilmesi için arkaplanı opak (saydam olmayan tam kapalı) yaptık
+            ctx.fillStyle = "rgba(15, 23, 42, 1)"; 
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(boxX, boxY, boxW, boxH, 4);
+            ctx.fill();
+            ctx.stroke();
+
+            // Draw Text
+            ctx.fillStyle = color;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (text2) {
+                ctx.fillText(text, cx, sy - 8);
+                ctx.fillStyle = "#94a3b8"; // Slate 400 for bpm
+                ctx.font = "12px Inter, sans-serif";
+                ctx.fillText(text2, cx, sy + 8);
+            } else {
+                ctx.fillText(text, cx, sy);
+            }
+        }
+
+        function draw() {
+            // Clear canvas
+            ctx.fillStyle = "#020617"; // Slate 950
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!img) {
+                ctx.fillStyle = "#334155"; // Slate 700
+                ctx.font = "16px Inter";
+                ctx.textAlign = "center";
+                ctx.fillText("Upload an ECG image to begin", canvas.width / 2, canvas.height / 2);
+                return;
+            }
+
+            // Draw Image
+            ctx.save();
+            ctx.translate(transform.x, transform.y);
+            ctx.scale(transform.zoom, transform.zoom);
+            ctx.drawImage(img, 0, 0);
+            ctx.restore();
+
+            // Draw Active Calibration Line
+            if (currentTool === 'calibrate' && calibStep === 1) {
+                const sx1 = imgToScreen(calibTempX, 'x');
+                const msx = imgToScreen(mouseImgX, 'x');
+                
+                drawLine(sx1, 0, sx1, canvas.height, COLOR_CALIB, 1.5, [4, 4]);
+                drawLine(msx, 0, msx, canvas.height, COLOR_CALIB, 1.5, [4, 4]);
+                
+                // Draw connecting hint
+                const cy = imgToScreen(mouseImgY, 'y');
+                drawLine(sx1, cy, msx, cy, COLOR_CALIB, 2);
+                
+                // Text
+                const calibText = "Defining 1 Big Square";
+                ctx.font = "bold 14px Inter";
+                ctx.textAlign = "center";
+                
+                // Pembe kağıtta net okunabilmesi için kalın siyah dış hat (stroke) eklendi
+                ctx.lineJoin = "round";
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = "#000000"; 
+                ctx.strokeText(calibText, (sx1 + msx) / 2, cy - 10);
+                
+                ctx.fillStyle = COLOR_CALIB;
+                ctx.fillText(calibText, (sx1 + msx) / 2, cy - 10);
+            }
+
+            // Draw Completed Calipers
+            calipers.forEach(c => {
+                drawCaliper(c, c.id === hoveredCaliperId || c.id === draggingCaliperId);
+            });
+
+            // Draw Active Measure Line
+            if (currentTool === 'measure' && measureStep === 1) {
+                const tempCaliper = {
+                    id: 'temp',
+                    x1: measureTempX1,
+                    x2: mouseImgX,
+                    y: mouseImgY
+                };
+                drawCaliper(tempCaliper, true); // Render live caliper outline
+            }
+        }
+        
+        // Initial Draw
+        draw();
+    </script>
+</body>
+</html>
