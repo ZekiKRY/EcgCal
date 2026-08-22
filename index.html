@@ -171,26 +171,7 @@
         <canvas id="ep-canvas" class="block w-full h-full touch-none"></canvas>
     </main>
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Firebase Configuration & State
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-ep-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        let auth = null, db = null, userId = null;
-
-        if (firebaseConfig) {
-            try {
-                const app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-            } catch (e) {
-                console.warn("Firebase Init Warning:", e);
-            }
-        }
-
+    <script>
         // DOM Elements
         const canvas = document.getElementById('ep-canvas');
         const ctx = canvas.getContext('2d');
@@ -225,14 +206,16 @@
         let currentTool = 'measure'; 
         
         // Calibration
-        let calibPixels = null; 
-        let calibStep = 0; 
+        // 1 large square = 5 mm. 
+        // 25 mm/s -> 200 ms. 50 mm/s -> 100 ms.
+        let calibPixels = null; // Pixel width of 1 large square
+        let calibStep = 0; // 0: idle, 1: point1 clicked
         let calibTempX = null;
         
         // Calipers
-        let calipers = []; 
+        let calipers = []; // { id, x1, x2, y }
         let nextCaliperId = 1;
-        let measureStep = 0; 
+        let measureStep = 0; // 0: idle, 1: first line placed
         let measureTempX1 = null;
         let measureTempY = null;
         
@@ -247,104 +230,12 @@
 
         let mouseImgX = 0, mouseImgY = 0;
 
-        const COLOR_CALIB = '#fbbf24'; 
-        const COLOR_CALIPER = '#22d3ee'; 
+        // Constants
+        const COLOR_CALIB = '#fbbf24'; // Amber 400
+        const COLOR_CALIPER = '#22d3ee'; // Cyan 400
         const COLOR_CALIPER_HOVER = '#ffffff'; 
 
-        // --- Cloud Save Logic ---
-        let saveTimeout = null;
-        function scheduleSave() {
-            if (saveTimeout) clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(performSave, 1500); // 1.5s debounce
-        }
-
-        async function performSave() {
-            if (!userId || !db) return;
-            try {
-                let imgBase64 = null;
-                if (img) {
-                    const c = document.createElement('canvas');
-                    c.width = img.width;
-                    c.height = img.height;
-                    const cCtx = c.getContext('2d');
-                    cCtx.drawImage(img, 0, 0);
-                    // Veritabanı sınırlarını aşmamak için JPEG ile sıkıştırıyoruz
-                    imgBase64 = c.toDataURL('image/jpeg', 0.5); 
-                }
-
-                const stateDoc = doc(db, 'artifacts', appId, 'users', userId, 'caliper_state', 'latest');
-                await setDoc(stateDoc, {
-                    imageData: imgBase64,
-                    calibPixels: calibPixels,
-                    calipers: calipers,
-                    sweepSpeed: parseFloat(sweepSpeedInput.value),
-                    showBpm: showBpm
-                });
-            } catch (e) {
-                console.error("Save state error:", e);
-            }
-        }
-
-        async function loadState() {
-            if (!userId || !db) {
-                draw(); return;
-            }
-            try {
-                statusText.innerText = "Restoring previous session...";
-                const stateDoc = doc(db, 'artifacts', appId, 'users', userId, 'caliper_state', 'latest');
-                const snap = await getDoc(stateDoc);
-                
-                if (snap.exists()) {
-                    const data = snap.data();
-                    
-                    if (data.sweepSpeed) sweepSpeedInput.value = data.sweepSpeed;
-                    if (data.showBpm !== undefined) {
-                        showBpm = data.showBpm;
-                        toggleBpm.checked = showBpm;
-                    }
-
-                    if (data.imageData) {
-                        const newImg = new Image();
-                        newImg.onload = () => {
-                            img = newImg;
-                            calibPixels = data.calibPixels || null;
-                            calipers = data.calipers || [];
-                            nextCaliperId = calipers.length > 0 ? Math.max(...calipers.map(c => c.id)) + 1 : 1;
-                            fitImageToScreen();
-                            setTool(calibPixels ? 'measure' : 'calibrate');
-                            updateStatusText();
-                            draw();
-                        };
-                        newImg.src = data.imageData;
-                    } else {
-                        updateStatusText(); draw();
-                    }
-                } else {
-                    updateStatusText(); draw();
-                }
-            } catch (e) {
-                console.error("Load state error:", e);
-                updateStatusText(); draw();
-            }
-        }
-
-        async function initAuth() {
-            if (!auth) { draw(); return; }
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-                userId = auth.currentUser?.uid;
-                if (userId) loadState();
-                else draw();
-            } catch(e) {
-                console.error("Auth Error:", e);
-                draw();
-            }
-        }
-
+        // Mobile Menu Toggle Logic
         function toggleMobileMenu() {
             isMobileMenuOpen = !isMobileMenuOpen;
             if (isMobileMenuOpen) {
@@ -374,20 +265,21 @@
 
         function onMediaLoaded(mediaSource) {
             img = mediaSource;
-            calibPixels = null; 
-            calipers = []; 
+            calibPixels = null; // reset calibration on new image
+            calipers = []; // clear calipers
             fitImageToScreen();
-            setTool('calibrate'); 
+            setTool('calibrate'); // Auto-prompt calibration
             updateStatusText();
             draw();
-            scheduleSave(); // Save fresh image
             
+            // Auto close mobile menu after upload
             if (window.innerWidth < 768 && isMobileMenuOpen) toggleMobileMenu();
         }
 
         function handleImageLoad(file) {
             if (!file) return;
 
+            // Eğer dosya PDF ise
             if (file.type === 'application/pdf') {
                 statusText.innerText = "Loading PDF...";
                 const reader = new FileReader();
@@ -395,16 +287,29 @@
                     try {
                         const typedarray = new Uint8Array(e.target.result);
                         const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                        
+                        // İlk sayfayı alıyoruz
                         const page = await pdf.getPage(1); 
+                        
+                        // EKG çizgilerinin net görünmesi için yüksek ölçek (scale: 3) kullanıyoruz
                         const viewport = page.getViewport({ scale: 3.0 });
                         
+                        // Arkaplanda bir canvas oluşturup PDF'i buraya çiziyoruz
                         const offscreenCanvas = document.createElement('canvas');
                         const offscreenCtx = offscreenCanvas.getContext('2d');
                         offscreenCanvas.width = viewport.width;
                         offscreenCanvas.height = viewport.height;
                         
-                        await page.render({ canvasContext: offscreenCtx, viewport: viewport }).promise;
+                        const renderContext = {
+                            canvasContext: offscreenCtx,
+                            viewport: viewport
+                        };
+                        
+                        await page.render(renderContext).promise;
+                        
+                        // Oluşan canvas'ı resim kaynağımız olarak kullanıyoruz
                         onMediaLoaded(offscreenCanvas);
+                        
                     } catch (error) {
                         console.error("PDF render hatası: ", error);
                         statusText.innerText = "Error loading PDF.";
@@ -415,40 +320,61 @@
                 return;
             }
 
+            // Normal Resim ise (PNG, JPG vb.)
             const reader = new FileReader();
             reader.onload = (e) => {
                 const newImg = new Image();
-                newImg.onload = () => onMediaLoaded(newImg);
+                newImg.onload = () => {
+                    onMediaLoaded(newImg);
+                };
                 newImg.src = e.target.result;
             };
             reader.readAsDataURL(file);
         }
 
         fileInput.addEventListener('change', (e) => {
-            if (e.target.files && e.target.files[0]) handleImageLoad(e.target.files[0]);
+            if (e.target.files && e.target.files[0]) {
+                handleImageLoad(e.target.files[0]);
+            }
         });
 
+        // --- Drag & Drop (Sürükle & Bırak) Yönetimi ---
         const dropzone = document.getElementById('upload-dropzone');
+
+        // Sayfa genelinde varsayılan dosya açma davranışını kapat (sayfa değişmesini engeller)
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            window.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); });
+            window.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
         });
+
+        // Dosya sürüklendiğinde yükleme kutucuğunu belirginleştir
         window.addEventListener('dragenter', (e) => {
             if (e.dataTransfer.types.includes('Files')) {
                 dropzone.classList.add('border-blue-500', 'bg-slate-700');
                 dropzone.classList.remove('border-slate-600', 'bg-slate-800');
             }
         });
+
+        // Sürükleme işleminden vazgeçilirse rengi eski haline çevir
         window.addEventListener('dragleave', (e) => {
             if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
                 dropzone.classList.remove('border-blue-500', 'bg-slate-700');
                 dropzone.classList.add('border-slate-600', 'bg-slate-800');
             }
         });
+
+        // Dosya bırakıldığında okuma işlemini başlat
         window.addEventListener('drop', (e) => {
             dropzone.classList.remove('border-blue-500', 'bg-slate-700');
             dropzone.classList.add('border-slate-600', 'bg-slate-800');
-            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleImageLoad(e.dataTransfer.files[0]);
+            
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                handleImageLoad(e.dataTransfer.files[0]);
+            }
         });
+        // -----------------------------------------------------
 
         function fitImageToScreen() {
             if (!img) return;
@@ -456,14 +382,17 @@
             const scaleX = (canvas.width - padding) / img.width;
             const scaleY = (canvas.height - padding) / img.height;
             transform.zoom = Math.min(scaleX, scaleY);
+            
+            // Center
             transform.x = (canvas.width - img.width * transform.zoom) / 2;
             transform.y = (canvas.height - img.height * transform.zoom) / 2;
         }
 
         function getScaleMsPerPixel() {
             if (!calibPixels) return null;
-            // Sweep Speed dinamik: 1 büyük kare = 1000ms
-            const msPerLargeSquare = 1000;
+            const sweepSpeed = parseFloat(sweepSpeedInput.value) || 25;
+            // 1 büyük kare = 1000ms (Kullanıcı ayarı: 25 mm/s baz alınarak orantılanır)
+            const msPerLargeSquare = 1000 * (25 / sweepSpeed);
             return msPerLargeSquare / calibPixels;
         }
 
@@ -497,8 +426,8 @@
             }
 
             if (currentTool === 'calibrate') {
-                if (calibStep === 0) statusText.innerText = "Calibration: Click the start of 1 Big Square.";
-                else statusText.innerText = "Calibration: Click the end of the Big Square.";
+                if (calibStep === 0) statusText.innerText = "Calibration: Click the start of 1 Large Square (1000ms).";
+                else statusText.innerText = "Calibration: Click the end of the Large Square.";
                 statusText.className = "text-sm font-medium text-amber-400";
             } else if (currentTool === 'measure') {
                 if (measureStep === 0) statusText.innerText = "Measure: Click to place the first caliper line.";
@@ -512,13 +441,23 @@
 
         function setTool(tool) {
             currentTool = tool;
-            calibStep = 0; measureStep = 0; draggingCaliperId = null;
+            
+            // Reset tool states
+            calibStep = 0;
+            measureStep = 0;
+            draggingCaliperId = null;
+
+            // Update UI buttons
             [btnCalibrate, btnMeasure, btnPan].forEach(btn => btn.classList.remove('active'));
             if (tool === 'calibrate') btnCalibrate.classList.add('active');
             if (tool === 'measure') btnMeasure.classList.add('active');
             if (tool === 'pan') btnPan.classList.add('active');
+
+            // Update Cursor
             container.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
-            updateStatusText(); draw();
+            
+            updateStatusText();
+            draw();
         }
 
         btnCalibrate.addEventListener('click', () => setTool('calibrate'));
@@ -529,124 +468,169 @@
             calipers = [];
             setTool('measure');
             draw();
-            scheduleSave();
             if (window.innerWidth < 768 && isMobileMenuOpen) toggleMobileMenu();
         });
 
         function applyImageRotation(direction) {
             if (!img) return;
+
             const offCanvas = document.createElement('canvas');
             const oCtx = offCanvas.getContext('2d');
+
+            // Swap dimensions
             offCanvas.width = img.height;
             offCanvas.height = img.width;
 
             oCtx.save();
             if (direction === 'right') {
-                oCtx.translate(offCanvas.width, 0); oCtx.rotate(Math.PI / 2);
+                oCtx.translate(offCanvas.width, 0);
+                oCtx.rotate(Math.PI / 2);
             } else if (direction === 'left') {
-                oCtx.translate(0, offCanvas.height); oCtx.rotate(-Math.PI / 2);
+                oCtx.translate(0, offCanvas.height);
+                oCtx.rotate(-Math.PI / 2);
             }
+            
+            // Draw current image onto the rotated canvas
             oCtx.drawImage(img, 0, 0);
             oCtx.restore();
 
+            // Update global img to the new rotated canvas
             img = offCanvas;
-            calibPixels = null; calipers = [];
+            
+            // Reset coordinates-dependent data
+            calibPixels = null;
+            calipers = [];
             fitImageToScreen();
             setTool('calibrate');
-            updateStatusText(); draw();
-            scheduleSave();
+            updateStatusText();
+            draw();
         }
 
         btnRotateLeft.addEventListener('click', () => applyImageRotation('left'));
         btnRotateRight.addEventListener('click', () => applyImageRotation('right'));
 
+        // Değer değişimi tamamlandığında kurallara (25'in katı, min 25, max 200) uymasını sağla
         sweepSpeedInput.addEventListener('change', (e) => {
             let val = parseInt(e.target.value);
             if (isNaN(val) || val < 25) val = 25;
             if (val > 200) val = 200;
-            val = Math.round(val / 25) * 25; 
+            val = Math.round(val / 25) * 25; // 25'in katlarına yuvarla
             e.target.value = val;
-            updateStatusText(); draw(); scheduleSave();
+            updateStatusText();
+            draw();
+        });
+
+        sweepSpeedInput.addEventListener('input', () => {
+            updateStatusText();
+            draw();
         });
 
         toggleBpm.addEventListener('change', (e) => {
             showBpm = e.target.checked;
-            draw(); scheduleSave();
+            draw();
         });
 
+        // Hit Detection
         function getHitCaliper(imgX, imgY) {
-            const thresholdImg = 8 / transform.zoom;
+            const hitThresholdScreen = 8; // pixels
+            const thresholdImg = hitThresholdScreen / transform.zoom;
+
+            // Search backwards to prioritize top-most rendered
             for (let i = calipers.length - 1; i >= 0; i--) {
                 const c = calipers[i];
+                
+                // Check vertical lines
                 if (Math.abs(imgX - c.x1) <= thresholdImg) return c.id;
                 if (Math.abs(imgX - c.x2) <= thresholdImg) return c.id;
+                
+                // Check horizontal line
                 const minX = Math.min(c.x1, c.x2) - thresholdImg;
                 const maxX = Math.max(c.x1, c.x2) + thresholdImg;
-                if (imgX >= minX && imgX <= maxX && Math.abs(imgY - c.y) <= thresholdImg) return c.id;
+                if (imgX >= minX && imgX <= maxX && Math.abs(imgY - c.y) <= thresholdImg) {
+                    return c.id;
+                }
             }
             return null;
         }
 
         canvas.addEventListener('contextmenu', e => e.preventDefault());
 
+        // --- Unified Pointer/Touch Interactions (PC & Mobile Sync) ---
         function handlePointerDown(sx, sy, button) {
             const ix = screenToImg(sx, 'x');
             const iy = screenToImg(sy, 'y');
 
+            // Right click / Long Press: Delete or Cancel current action
             if (button === 2) {
                 if (currentTool === 'measure' && measureStep === 1) {
-                    measureStep = 0; draw(); return;
+                    measureStep = 0;
+                    draw();
+                    return;
                 }
                 if (currentTool === 'calibrate' && calibStep === 1) {
-                    calibStep = 0; draw(); return;
+                    calibStep = 0;
+                    draw();
+                    return;
                 }
                 const hitId = getHitCaliper(ix, iy);
                 if (hitId) {
                     calipers = calipers.filter(c => c.id !== hitId);
-                    hoveredCaliperId = null; draw(); scheduleSave();
+                    hoveredCaliperId = null;
+                    draw();
                 }
                 return;
             }
 
+            // Middle click or Pan tool: Pan
             if (button === 1 || currentTool === 'pan') {
                 isPanning = true;
-                panStartX = sx - transform.x; panStartY = sy - transform.y;
-                container.style.cursor = 'grabbing'; return;
+                panStartX = sx - transform.x;
+                panStartY = sy - transform.y;
+                container.style.cursor = 'grabbing';
+                return;
             }
 
+            // Left click / Tap Actions
             if (button === 0) {
                 if (currentTool === 'calibrate') {
                     if (calibStep === 0) {
-                        calibTempX = ix; calibStep = 1;
+                        calibTempX = ix;
+                        calibStep = 1;
                     } else if (calibStep === 1) {
                         const dist = Math.abs(ix - calibTempX);
                         if (dist > 5) {
-                            calibPixels = dist; setTool('measure'); scheduleSave();
+                            calibPixels = dist;
+                            setTool('measure'); 
                         } else {
                             calibStep = 0;
                         }
                     }
-                    updateStatusText(); draw();
+                    updateStatusText();
+                    draw();
                 } 
                 else if (currentTool === 'measure') {
                     const hitId = getHitCaliper(ix, iy);
                     if (hitId) {
-                        draggingCaliperId = hitId; dragStartImgX = ix;
+                        draggingCaliperId = hitId;
+                        dragStartImgX = ix;
                         const c = calipers.find(c => c.id === hitId);
-                        dragStartCaliperX1 = c.x1; dragStartCaliperX2 = c.x2;
+                        dragStartCaliperX1 = c.x1;
+                        dragStartCaliperX2 = c.x2;
                         return; 
                     }
 
                     if (measureStep === 0) {
-                        measureTempX1 = ix; measureTempY = iy; measureStep = 1;
+                        measureTempX1 = ix;
+                        measureTempY = iy;
+                        measureStep = 1;
                     } else if (measureStep === 1) {
                         if (Math.abs(ix - measureTempX1) > 1) {
                             calipers.push({ id: nextCaliperId++, x1: measureTempX1, x2: ix, y: iy });
-                            scheduleSave();
                         }
                         measureStep = 0;
                     }
-                    updateStatusText(); draw();
+                    updateStatusText();
+                    draw();
                 }
             }
         }
@@ -654,11 +638,14 @@
         function handlePointerMove(sx, sy) {
             const ix = screenToImg(sx, 'x');
             const iy = screenToImg(sy, 'y');
-            mouseImgX = ix; mouseImgY = iy;
+            mouseImgX = ix;
+            mouseImgY = iy;
 
             if (isPanning) {
-                transform.x = sx - panStartX; transform.y = sy - panStartY;
-                draw(); return;
+                transform.x = sx - panStartX;
+                transform.y = sy - panStartY;
+                draw();
+                return;
             }
 
             if (draggingCaliperId) {
@@ -684,23 +671,26 @@
             }
 
             if (calibStep === 1 || measureStep === 1) {
-                if(measureStep === 1) measureTempY = iy;
+                if(measureStep === 1) {
+                    measureTempY = iy;
+                }
                 draw();
             }
         }
 
         function handlePointerUp() {
             isPanning = false;
-            let wasDragging = draggingCaliperId !== null;
             draggingCaliperId = null;
-            
-            if (currentTool === 'pan') container.style.cursor = 'grab';
-            else if (currentTool === 'measure' && !hoveredCaliperId) container.style.cursor = 'crosshair';
-            
-            if (wasDragging) scheduleSave();
+            if (currentTool === 'pan') {
+                container.style.cursor = 'grab';
+            } else if (currentTool === 'measure' && !hoveredCaliperId) {
+                container.style.cursor = 'crosshair';
+            }
         }
 
         let isTouchActive = false;
+
+        // --- Mouse Events (Desktop) ---
         canvas.addEventListener('mousedown', e => {
             if (isTouchActive || !img) return;
             const rect = canvas.getBoundingClientRect();
@@ -718,23 +708,30 @@
             handlePointerUp();
         });
 
+        // --- Touch Events (Mobile/Tablet) ---
         let initialPinchDist = null;
-        let pinchCenterImgX = 0; let pinchCenterImgY = 0;
+        let pinchCenterImgX = 0;
+        let pinchCenterImgY = 0;
         let touchLongPressTimer = null;
 
         canvas.addEventListener('touchstart', e => {
-            e.preventDefault(); 
+            e.preventDefault(); // Sayfanın kaymasını engelle
             isTouchActive = true;
             if (!img) return;
+
             const rect = canvas.getBoundingClientRect();
             
             if (e.touches.length === 2) {
                 clearTimeout(touchLongPressTimer);
-                const t1 = e.touches[0]; const t2 = e.touches[1];
+                const t1 = e.touches[0]; 
+                const t2 = e.touches[1];
                 initialPinchDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                
                 const cx = (t1.clientX + t2.clientX) / 2 - rect.left;
                 const cy = (t1.clientY + t2.clientY) / 2 - rect.top;
-                pinchCenterImgX = screenToImg(cx, 'x'); pinchCenterImgY = screenToImg(cy, 'y');
+                
+                pinchCenterImgX = screenToImg(cx, 'x');
+                pinchCenterImgY = screenToImg(cy, 'y');
                 
                 if (measureStep === 1) measureStep = 0;
                 if (calibStep === 1) calibStep = 0;
@@ -743,10 +740,12 @@
                 const sx = e.touches[0].clientX - rect.left;
                 const sy = e.touches[0].clientY - rect.top;
 
+                // Uzun basma (500ms) = Sağ Tık (Silme İşlemi)
                 touchLongPressTimer = setTimeout(() => {
                     handlePointerDown(sx, sy, 2); 
-                    if (navigator.vibrate) navigator.vibrate(50); 
+                    if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback desteği varsa titreşim
                 }, 500);
+
                 handlePointerDown(sx, sy, 0); 
             }
         }, { passive: false });
@@ -757,9 +756,13 @@
             const rect = canvas.getBoundingClientRect();
 
             if (e.touches.length === 2 && initialPinchDist !== null) {
-                const t1 = e.touches[0]; const t2 = e.touches[1];
+                const t1 = e.touches[0]; 
+                const t2 = e.touches[1];
                 const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-                let newZoom = transform.zoom * (currentDist / initialPinchDist);
+                
+                const zoomFactor = currentDist / initialPinchDist;
+                
+                let newZoom = transform.zoom * zoomFactor;
                 newZoom = Math.max(0.05, Math.min(newZoom, 50));
                 transform.zoom = newZoom;
                 
@@ -767,11 +770,14 @@
                 const cy = (t1.clientY + t2.clientY) / 2 - rect.top;
                 transform.x = cx - pinchCenterImgX * transform.zoom;
                 transform.y = cy - pinchCenterImgY * transform.zoom;
+                
                 initialPinchDist = currentDist; 
                 draw();
             } else if (e.touches.length === 1) {
                 const sx = e.touches[0].clientX - rect.left;
                 const sy = e.touches[0].clientY - rect.top;
+                
+                // Parmağı hareket ettirirse yanlışlıkla uzun basılmasını iptal et
                 clearTimeout(touchLongPressTimer);
                 handlePointerMove(sx, sy);
             }
@@ -785,25 +791,44 @@
             setTimeout(() => { isTouchActive = false; }, 300);
         }, { passive: false });
 
+
+        // Zoom logic
         canvas.addEventListener('wheel', e => {
             e.preventDefault();
             if (!img) return;
-            const rect = canvas.getBoundingClientRect();
-            const sx = e.clientX - rect.left; const sy = e.clientY - rect.top;
-            const ixBefore = screenToImg(sx, 'x'); const iyBefore = screenToImg(sy, 'y');
 
-            let newZoom = transform.zoom * (1 + (-e.deltaY * 0.0015));
-            newZoom = Math.max(0.05, Math.min(newZoom, 50)); 
+            const rect = canvas.getBoundingClientRect();
+            const sx = e.clientX - rect.left;
+            const sy = e.clientY - rect.top;
+            
+            // Current mouse pos in image coords
+            const ixBefore = screenToImg(sx, 'x');
+            const iyBefore = screenToImg(sy, 'y');
+
+            const zoomSensitivity = 0.0015;
+            let zoomDelta = -e.deltaY * zoomSensitivity;
+            
+            let newZoom = transform.zoom * (1 + zoomDelta);
+            newZoom = Math.max(0.05, Math.min(newZoom, 50)); // clamp zoom
+
             transform.zoom = newZoom;
+
+            // Adjust pan so mouse stays over same image coordinate
             transform.x = sx - ixBefore * transform.zoom;
             transform.y = sy - iyBefore * transform.zoom;
+
             draw();
         }, { passive: false });
 
         function drawLine(sx1, sy1, sx2, sy2, color, width, dash = []) {
-            ctx.beginPath(); ctx.moveTo(sx1, sy1); ctx.lineTo(sx2, sy2);
-            ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
-            ctx.stroke(); ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(sx1, sy1);
+            ctx.lineTo(sx2, sy2);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.setLineDash(dash);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
 
         function drawCaliper(c, isHovered) {
@@ -812,49 +837,77 @@
             const sy = imgToScreen(c.y, 'y');
             const color = isHovered ? COLOR_CALIPER_HOVER : COLOR_CALIPER;
 
+            // Draw vertical guides (spanning full canvas)
             drawLine(sx1, 0, sx1, canvas.height, color, 1.5, [6, 4]);
             drawLine(sx2, 0, sx2, canvas.height, color, 1.5, [6, 4]);
+
+            // Draw horizontal connector
             drawLine(sx1, sy, sx2, sy, color, 2);
 
+            // Draw arrows at ends of connector
             const arrowSize = 6;
             ctx.fillStyle = color;
-            ctx.beginPath();
-            if (sx1 < sx2) { ctx.moveTo(sx1, sy); ctx.lineTo(sx1 + arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx1 + arrowSize, sy + arrowSize/1.5); } 
-            else { ctx.moveTo(sx1, sy); ctx.lineTo(sx1 - arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx1 - arrowSize, sy + arrowSize/1.5); }
+            ctx.beginPath(); // Left arrow
+            if (sx1 < sx2) {
+                ctx.moveTo(sx1, sy); ctx.lineTo(sx1 + arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx1 + arrowSize, sy + arrowSize/1.5);
+            } else {
+                ctx.moveTo(sx1, sy); ctx.lineTo(sx1 - arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx1 - arrowSize, sy + arrowSize/1.5);
+            }
             ctx.fill();
 
-            ctx.beginPath(); 
-            if (sx2 > sx1) { ctx.moveTo(sx2, sy); ctx.lineTo(sx2 - arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx2 - arrowSize, sy + arrowSize/1.5); } 
-            else { ctx.moveTo(sx2, sy); ctx.lineTo(sx2 + arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx2 + arrowSize, sy + arrowSize/1.5); }
+            ctx.beginPath(); // Right arrow
+            if (sx2 > sx1) {
+                ctx.moveTo(sx2, sy); ctx.lineTo(sx2 - arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx2 - arrowSize, sy + arrowSize/1.5);
+            } else {
+                ctx.moveTo(sx2, sy); ctx.lineTo(sx2 + arrowSize, sy - arrowSize/1.5); ctx.lineTo(sx2 + arrowSize, sy + arrowSize/1.5);
+            }
             ctx.fill();
 
+            // Calculate measurements
             const msPerPx = getScaleMsPerPixel();
-            let text = "", text2 = "";
+            let text = "";
+            let text2 = "";
             
             if (msPerPx) {
-                const ms = Math.abs(c.x2 - c.x1) * msPerPx;
+                const pixelDist = Math.abs(c.x2 - c.x1);
+                const ms = pixelDist * msPerPx;
                 text = `${ms.toFixed(0)} ms`;
-                if (showBpm && ms > 0) text2 = `[${(60000 / ms).toFixed(0)} bpm]`;
+                if (showBpm) {
+                    const bpm = ms > 0 ? (60000 / ms) : 0;
+                    text2 = `[${bpm.toFixed(0)} bpm]`;
+                }
             } else {
                 text = `${Math.abs(c.x2 - c.x1).toFixed(0)} px`;
             }
 
+            // Draw Label Box
             const cx = (sx1 + sx2) / 2;
             ctx.font = "bold 13px Inter, sans-serif";
-            const m1 = ctx.measureText(text); const m2 = ctx.measureText(text2);
-            const boxW = Math.max(m1.width, m2.width) + 16;
+            const m1 = ctx.measureText(text);
+            const m2 = ctx.measureText(text2);
+            const textWidth = Math.max(m1.width, m2.width);
+            const boxW = textWidth + 16;
             const boxH = text2 ? 40 : 22;
-            const boxX = cx - boxW / 2; const boxY = sy - boxH / 2;
+            const boxX = cx - boxW / 2;
+            const boxY = sy - boxH / 2;
 
+            // Pembe EKG zemininde okunabilmesi için arkaplanı opak (saydam olmayan tam kapalı) yaptık
             ctx.fillStyle = "rgba(15, 23, 42, 1)"; 
-            ctx.strokeStyle = color; ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.roundRect(boxX, boxY, boxW, boxH, 4);
-            ctx.fill(); ctx.stroke();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(boxX, boxY, boxW, boxH, 4);
+            ctx.fill();
+            ctx.stroke();
 
-            ctx.fillStyle = color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            // Draw Text
+            ctx.fillStyle = color;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
             if (text2) {
                 ctx.fillText(text, cx, sy - 8);
-                ctx.fillStyle = "#94a3b8"; ctx.font = "12px Inter, sans-serif";
+                ctx.fillStyle = "#94a3b8"; // Slate 400 for bpm
+                ctx.font = "12px Inter, sans-serif";
                 ctx.fillText(text2, cx, sy + 8);
             } else {
                 ctx.fillText(text, cx, sy);
@@ -862,46 +915,71 @@
         }
 
         function draw() {
-            ctx.fillStyle = "#020617"; 
+            // Clear canvas
+            ctx.fillStyle = "#020617"; // Slate 950
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             if (!img) {
-                ctx.fillStyle = "#334155"; ctx.font = "16px Inter"; ctx.textAlign = "center";
+                ctx.fillStyle = "#334155"; // Slate 700
+                ctx.font = "16px Inter";
+                ctx.textAlign = "center";
                 ctx.fillText("Upload an ECG image to begin", canvas.width / 2, canvas.height / 2);
                 return;
             }
 
+            // Draw Image
             ctx.save();
             ctx.translate(transform.x, transform.y);
             ctx.scale(transform.zoom, transform.zoom);
             ctx.drawImage(img, 0, 0);
             ctx.restore();
 
+            // Draw Active Calibration Line
             if (currentTool === 'calibrate' && calibStep === 1) {
                 const sx1 = imgToScreen(calibTempX, 'x');
                 const msx = imgToScreen(mouseImgX, 'x');
-                const cy = imgToScreen(mouseImgY, 'y');
                 
                 drawLine(sx1, 0, sx1, canvas.height, COLOR_CALIB, 1.5, [4, 4]);
                 drawLine(msx, 0, msx, canvas.height, COLOR_CALIB, 1.5, [4, 4]);
+                
+                // Draw connecting hint
+                const cy = imgToScreen(mouseImgY, 'y');
                 drawLine(sx1, cy, msx, cy, COLOR_CALIB, 2);
                 
+                // Text
                 const calibText = "Defining 1 Big Square";
-                ctx.font = "bold 14px Inter"; ctx.textAlign = "center";
-                ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "#000000"; 
+                ctx.font = "bold 14px Inter";
+                ctx.textAlign = "center";
+                
+                // Pembe kağıtta net okunabilmesi için kalın siyah dış hat (stroke) eklendi
+                ctx.lineJoin = "round";
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = "#000000"; 
                 ctx.strokeText(calibText, (sx1 + msx) / 2, cy - 10);
-                ctx.fillStyle = COLOR_CALIB; ctx.fillText(calibText, (sx1 + msx) / 2, cy - 10);
+                
+                ctx.fillStyle = COLOR_CALIB;
+                ctx.fillText(calibText, (sx1 + msx) / 2, cy - 10);
             }
 
-            calipers.forEach(c => drawCaliper(c, c.id === hoveredCaliperId || c.id === draggingCaliperId));
+            // Draw Completed Calipers
+            calipers.forEach(c => {
+                drawCaliper(c, c.id === hoveredCaliperId || c.id === draggingCaliperId);
+            });
 
+            // Draw Active Measure Line
             if (currentTool === 'measure' && measureStep === 1) {
-                drawCaliper({ id: 'temp', x1: measureTempX1, x2: mouseImgX, y: mouseImgY }, true);
+                const tempCaliper = {
+                    id: 'temp',
+                    x1: measureTempX1,
+                    x2: mouseImgX,
+                    y: mouseImgY
+                };
+                drawCaliper(tempCaliper, true); // Render live caliper outline
             }
         }
         
-        // Start Auth & Render
-        initAuth();
+        // Initial Draw
+        draw();
     </script>
 </body>
 </html>
