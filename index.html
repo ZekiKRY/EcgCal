@@ -82,9 +82,24 @@
                 </label>
             </div>
 
+            <!-- Image Actions Section -->
+            <div class="flex flex-col gap-2">
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">2. Image</label>
+                <div class="flex gap-2">
+                    <button id="btn-rotate-left" class="flex-1 flex items-center justify-center gap-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-all text-sm font-medium text-slate-300">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                        Left
+                    </button>
+                    <button id="btn-rotate-right" class="flex-1 flex items-center justify-center gap-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-all text-sm font-medium text-slate-300">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+                        Right
+                    </button>
+                </div>
+            </div>
+
             <!-- Settings Section -->
             <div class="flex flex-col gap-2">
-                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">2. Settings</label>
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">3. Settings</label>
                 <div class="flex items-center justify-between bg-slate-900/50 p-3 rounded-lg border border-slate-700">
                     <span class="text-sm font-medium text-slate-300">Sweep Speed</span>
                     <div class="flex items-center gap-1">
@@ -104,7 +119,7 @@
 
             <!-- Actions / Tools Section -->
             <div class="flex flex-col gap-2">
-                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">3. Tools</label>
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">4. Tools</label>
                 
                 <button id="btn-tool-calibrate" class="tool-btn flex items-center gap-3 w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-all text-sm font-medium text-left">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20"/><path d="M12 2v20"/><path d="m4.93 4.93 14.14 14.14"/><path d="m4.93 19.07 14.14-14.14"/></svg>
@@ -175,6 +190,9 @@
         const btnMeasure = document.getElementById('btn-tool-measure');
         const btnPan = document.getElementById('btn-tool-pan');
         const btnClear = document.getElementById('btn-clear');
+        
+        const btnRotateLeft = document.getElementById('btn-rotate-left');
+        const btnRotateRight = document.getElementById('btn-rotate-right');
         
         const statusText = document.getElementById('status-text');
         const scaleInfo = document.getElementById('scale-info');
@@ -452,6 +470,44 @@
             draw();
             if (window.innerWidth < 768 && isMobileMenuOpen) toggleMobileMenu();
         });
+
+        function applyImageRotation(direction) {
+            if (!img) return;
+
+            const offCanvas = document.createElement('canvas');
+            const oCtx = offCanvas.getContext('2d');
+
+            // Swap dimensions
+            offCanvas.width = img.height;
+            offCanvas.height = img.width;
+
+            oCtx.save();
+            if (direction === 'right') {
+                oCtx.translate(offCanvas.width, 0);
+                oCtx.rotate(Math.PI / 2);
+            } else if (direction === 'left') {
+                oCtx.translate(0, offCanvas.height);
+                oCtx.rotate(-Math.PI / 2);
+            }
+            
+            // Draw current image onto the rotated canvas
+            oCtx.drawImage(img, 0, 0);
+            oCtx.restore();
+
+            // Update global img to the new rotated canvas
+            img = offCanvas;
+            
+            // Reset coordinates-dependent data
+            calibPixels = null;
+            calipers = [];
+            fitImageToScreen();
+            setTool('calibrate');
+            updateStatusText();
+            draw();
+        }
+
+        btnRotateLeft.addEventListener('click', () => applyImageRotation('left'));
+        btnRotateRight.addEventListener('click', () => applyImageRotation('right'));
 
         // Değer değişimi tamamlandığında kurallara (25'in katı, min 25, max 200) uymasını sağla
         sweepSpeedInput.addEventListener('change', (e) => {
